@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+import threading
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Gtk, Adw, Gio, GLib
+
+
+class MigrationTool(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="org.opensuse.MigrationTool",
+                         flags=Gio.ApplicationFlags.FLAGS_NONE)
+
+    def do_activate(self):
+        # Main Window
+        win = Adw.ApplicationWindow(application=self)
+        win.set_title("openSUSE Migration Tool")
+        win.set_default_size(800, 600)
+
+        # ToolbarView
+        content = Adw.ToolbarView()
+
+        # Headerbar with Back, Title, Close
+        headerbar = Adw.HeaderBar()
+        self.back_btn = Gtk.Button.new_from_icon_name("go-previous-symbolic")
+        self.back_btn.set_visible(False)
+        self.back_btn.connect("clicked", self.on_back)
+        headerbar.pack_start(self.back_btn)
+
+        self.close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
+        self.close_btn.connect("clicked", lambda *_: win.close())
+        headerbar.pack_end(self.close_btn)
+
+        self.title_label = Gtk.Label(label="Migration Targets")
+        headerbar.set_title_widget(self.title_label)
+
+        content.add_top_bar(headerbar)
+
+        # ViewStack
+        self.view_stack = Adw.ViewStack()
+        content.set_content(self.view_stack)
+
+        # Pages
+        self.target_page = self.build_target_selection_page()
+        self.repo_page = self.build_repo_selection_page([
+            ("packman", "Packman Repository", True),
+            ("home:user", "User Repository", True),
+            ("vscode", "VSCode Repo", False),
+        ])
+        self.tasks_page = self.build_post_tasks_page([
+            ("pulse2pipewire", "Migrate from PulseAudio to PipeWire", True),
+            ("remove-old-kernels", "Remove old kernels", False),
+        ])
+        self.logs_page = self.build_logs_page()
+
+        self.view_stack.add_titled(self.target_page, "targets", "Targets")
+        self.view_stack.add_titled(self.repo_page, "repos", "Repositories")
+        self.view_stack.add_titled(self.tasks_page, "tasks", "Tasks")
+        self.view_stack.add_titled(self.logs_page, "logs", "Logs")
+
+        win.set_content(content)
+        win.present()
+
+        self.win = win
+        self.current_step = "targets"
+
+    def build_target_selection_page(self):
+        page = Adw.PreferencesPage(title="Migration Targets")
+        group = Adw.PreferencesGroup(title="Select Target Version")
+        page.add(group)
+
+        targets = [
+            ("Leap 16.0", "distribution-logos/leap.svg"),
+            ("Leap Micro 6.0", "distribution-logos/leapmicro.svg"),
+        ]
+
+        for target, icon_name in targets:
+            row = Adw.ActionRow(title=target)
+
+            # Product icon e.g. applications-system
+            # img = Gtk.Image.new_from_icon_name(icon_name)
+            img = Gtk.Image.new_from_file(icon_name)
+            img.set_pixel_size(32)
+            row.add_prefix(img)
+
+            row.set_activatable(True)
+            row.connect("activated", self.on_target_selected)
+            group.add(row)
+
+        return page
+
+    def build_repo_selection_page(self, repos):
+        page = Adw.PreferencesPage(title="Third-Party Repositories")
+        group = Adw.PreferencesGroup(title="Disable Unrecognized Repositories")
+        page.add(group)
+
+        self.repo_switches = {}
+
+        for alias, name, preselected in repos:
+            row = Adw.ActionRow(title=alias, subtitle=name)
+            switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+            switch.set_active(preselected)
+            row.add_suffix(switch)
+            group.add(row)
+            self.repo_switches[alias] = switch
+        return page
+
+    def build_post_tasks_page(self, tasks):
+        page = Adw.PreferencesPage(title="Post-Migration Tasks")
+        group = Adw.PreferencesGroup(title="Optional Cleanup and Tweaks")
+        page.add(group)
+
+        self.task_switches = {}
+
+        for task_id, desc, preselected in tasks:
+            row = Adw.ActionRow(title=task_id, subtitle=desc)
+            switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+            switch.set_active(preselected)
+            row.add_suffix(switch)
+            group.add(row)
+            self.task_switches[task_id] = switch
+        return page
+
+    def build_logs_page(self):
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+        self.log_view = Gtk.TextView(editable=False, monospace=True)
+        scrolled.set_child(self.log_view)
+        return scrolled
+
+    def on_back(self, *_):
+        if self.current_step == "repos":
+            self.show_page("targets", "Migration Targets", back_visible=False)
+        elif self.current_step == "tasks":
+            self.show_page("repos", "Repositories")
+        elif self.current_step == "logs":
+            self.show_page("tasks", "Post-Migration Tasks")
+
+    def on_target_selected(self, row, *_):
+        self.selected_target = row.get_title()
+        self.show_page("repos", "Repositories")
+
+    def show_page(self, name, title, back_visible=True):
+        self.view_stack.set_visible_child_name(name)
+        self.title_label.set_text(title)
+        self.back_btn.set_visible(back_visible)
+        self.current_step = name
+
+    # ------------------ Zypper Simulation ------------------
+
+    def start_migration(self):
+        self.show_page("logs", "Logs")
+        buf = self.log_view.get_buffer()
+        buf.set_text(f"Starting migration to {self.selected_target}...\n")
+
+        disabled_repos = self.get_disabled_repos()
+        tasks = self.get_selected_tasks()
+
+        buf.insert(buf.get_end_iter(), f"Repos to disable: {', '.join(disabled_repos) or 'none'}\n")
+        buf.insert(buf.get_end_iter(), f"Tasks to run: {', '.join(tasks) or 'none'}\n\n")
+
+        def worker():
+            for step in ["Refreshing repositories", "Downloading packages", "Installing", "Cleaning up"]:
+                GLib.idle_add(self.append_log, f"{step}...\n")
+                import time; time.sleep(1)
+            GLib.idle_add(self.append_log, "Migration complete!\n")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def get_disabled_repos(self):
+        return [alias for alias, sw in self.repo_switches.items() if sw.get_active()]
+
+    def get_selected_tasks(self):
+        return [task for task, sw in self.task_switches.items() if sw.get_active()]
+
+    def append_log(self, msg):
+        buf = self.log_view.get_buffer()
+        buf.insert(buf.get_end_iter(), msg)
+        return False
+
+
+def main():
+    app = MigrationTool()
+    app.run()
+
+
+if __name__ == "__main__":
+    main()
+
