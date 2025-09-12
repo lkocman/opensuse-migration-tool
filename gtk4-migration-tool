@@ -27,9 +27,10 @@ class MigrationTool(Adw.Application):
         self.back_btn.connect("clicked", self.on_back)
         headerbar.pack_start(self.back_btn)
 
-        self.close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
-        self.close_btn.connect("clicked", lambda *_: win.close())
-        headerbar.pack_end(self.close_btn)
+# 
+#        self.close_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
+#        self.close_btn.connect("clicked", lambda *_: win.close())
+#        headerbar.pack_end(self.close_btn)
 
         self.title_label = Gtk.Label(label="Migration Targets")
         headerbar.set_title_widget(self.title_label)
